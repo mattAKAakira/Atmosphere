@@ -1,4 +1,5 @@
-name: Build Atmosphere Dist
+name: Build Atmosphere
+
 on:
   workflow_dispatch:
 
@@ -14,16 +15,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Python 2 and lz4
+      - name: Install Build Dependencies
         run: |
-          pacman -Syu --noconfirm python2 python2-pip zip
+          # 安装 Python 2 和 pip
+          pacman -Syu --noconfirm python2 python2-pip
+          # 使用 Python 2 的 pip 安装 lz4 库
           python2 -m pip install lz4
 
-      - name: Build Dist
-        run: make dist -j$(nproc)
+      - name: Build
+        run: make -j$(nproc) package3
 
-      - name: Upload Artifacts
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: atmosphere-dist
-          path: out/
+          name: atmosphere-package3
+          path: out/atmosphere/package3
