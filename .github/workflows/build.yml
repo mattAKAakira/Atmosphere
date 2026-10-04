@@ -1,32 +1,103 @@
-name: Build Atmosphere
+name: 编译大气层核心 (Atmosphere)
+
+# 触发方式:
+#   1) 手动:进入 Actions 页面,选 Build Atmosphere,点 Run workflow
+#   2) 打 tag(如 v1.12.0)并推送时自动构建,成功后自动创建 Release
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "devkitA64 镜像版本(用固定工具链)。可填 latest,或填日期如 20260704"
+        required: false
+        default: "latest"
+      no_werror:
+        description: "当报错里出现 [-Werror=...] 时勾选:把警告降级,不再中断构建"
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags: ["v*", "[0-9]*"]
+
 permissions:
-  contents: write
+  contents: write          # 打 tag 时需要写 Release
+
 jobs:
   build:
+    name: 编译并打包
     runs-on: ubuntu-latest
+
+    # 官方 devkitA64 镜像内部已经装好 devkitA64 / devkitARM / switch-dev /
+    # switch-portlibs(含 switch-glm、switch-libjpeg-turbo)/ hactool / zip / python3-lz4。
+    # 用它就不需要访问 apt.devkitpro.org,从根上避开 wget 403 的问题。
+    # 标签格式为 latest 或日期(YYYYMMDD),可用来把工具链固定在某个确定版本。
     container:
-      image: devkitpro/devkita64:latest
-    env:
-      DEVKITPRO: /opt/devkitpro
-      DEVKITA64: /opt/devkitpro/devkitA64
-      DEVKITARM: /opt/devkitpro/devkitARM
-      PATH: /opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin:${PATH}
+      image: devkitpro/devkita64:${{ github.event.inputs.image_tag || 'latest' }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取源码
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - run: git config --global --add safe.directory '*'
-      - run: make -j1 dist-no-debug-nx_release
-      - uses: actions/upload-artifact@v4
+          fetch-depth: 0          # 产物文件名要用到 git 提交号
+
+      - name: 打印工具链与源码版本(排错用)
+        shell: bash
+        run: |
+          echo "== 本次使用的镜像标签 =="
+          echo "${{ github.event.inputs.image_tag || 'latest' }}"
+          echo
+          echo "== 编译器版本 =="
+          aarch64-none-elf-gcc --version | head -1
+          arm-none-eabi-gcc --version | head -1
+          echo
+          echo "== devkitPro 关键包版本 =="
+          dkp-pacman -Q devkitA64 2>/dev/null || true
+          dkp-pacman -Q switch-dev 2>/dev/null || true
+          dkp-pacman -Q libnx 2>/dev/null || true
+          echo
+          echo "== 本次要编译的源码 =="
+          git log -1 --oneline
+          git describe --tags --always 2>/dev/null || true
+
+      - name: 编译并打包成可刷入 SD 卡的固件
+        shell: bash
+        run: |
+          set -o pipefail
+
+          # 可选开关:libstratosphere 等模块内置 -Wextra -Werror。
+          # ATMOSPHERE_CXXFLAGS 会被拼在 CXXFLAGS 的最后,排在 -Werror 之后,
+          # 所以在这里追加 -Wno-error 就能把"警告当错误"降级(仅对 C++ 源文件生效)。
+          WERROR_ARG=""
+          if [ "${{ github.event.inputs.no_werror }}" = "true" ]; then
+            WERROR_ARG="ATMOSPHERE_CXXFLAGS=-fno-rtti -fno-exceptions -std=gnu++23 -Wno-invalid-offsetof -Wno-error"
+          fi
+
+          # -O (--output-sync) 让每个文件的编译输出成组打印,报错不会被并行日志冲散,
+          # 避免只看到 "Error 1" 而看不到真正的那一行 error:。
+          if make -j"$(nproc)" -O $WERROR_ARG dist-no-debug-nx_release; then
+            echo "::notice::编译成功"
+          else
+            echo "::warning::并行编译失败,改用单线程重跑一次,以便拿到完整报错"
+            make -O $WERROR_ARG dist-no-debug-nx_release
+          fi
+
+      - name: 列出产物
+        shell: bash
+        run: ls -lh out/nintendo_nx_arm64_armv8a/release/
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
         with:
-          name: atmosphere-build
-          path: out/nintendo_nx_arm64_armv8a/release/*
-      - name: Create Release
+          name: atmosphere-nx-build
+          path: |
+            out/nintendo_nx_arm64_armv8a/release/*.zip
+            out/nintendo_nx_arm64_armv8a/release/fusee.bin
+          if-no-files-found: error
+
+      - name: 打 tag 时创建 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/nintendo_nx_arm64_armv8a/release/*
+          files: |
+            out/nintendo_nx_arm64_armv8a/release/*.zip
+            out/nintendo_nx_arm64_armv8a/release/fusee.bin
+          generate_release_notes: true
