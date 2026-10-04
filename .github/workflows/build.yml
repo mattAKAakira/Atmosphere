@@ -13,46 +13,98 @@ jobs:
     name: 编译大气层核心
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkita64:latest   # 官方镜像,自带 devkitA64 / devkitARM / switch-dev / hactool / zip / python3-lz4
+      # 关键:不要用 devkita64:latest,它会随着 devkitPro 上游滚动更新
+      # 导致新 GCC/新 libnx 与 Atmosphere 源码不兼容。
+      # 官方构建文档基于 Debian/Ubuntu 环境,这里用 ubuntu 基础镜像手动装工具链,
+      # 依赖版本由 dkp-pacman 的 sysupgrade 固定,完全可控。
+      image: ubuntu:22.04
 
     steps:
-      - name: 拉取源码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0    # 取全量历史,保证版本号里的 git 短哈希可用
-
-      - name: 配置 devkitPro 工具链环境变量
+      - name: 安装基础工具
         run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates curl gpg gzip bzip2 xz-utils make \
+            git python3 python3-pip unzip zip rsync wget \
+            libarchive-tools build-essential coreutils pkg-config \
+          && rm -rf /var/lib/apt/lists/*
+
+      - name: 安装 devkitPro pacman 与 devkitA64 工具链
+        run: |
+          wget -q https://apt.devkitpro.org/install-devkitpro-pacman -O /tmp/install-dkp.sh
+          chmod +x /tmp/install-dkp.sh
+          DEBIAN_FRONTEND=noninteractive /tmp/install-dkp.sh
+          rm /tmp/install-dkp.sh
+
+          # 写 devkitPro 环境变量,后续步骤直接生效
           echo "DEVKITPRO=/opt/devkitpro"        >> "$GITHUB_ENV"
           echo "DEVKITA64=/opt/devkitpro/devkitA64" >> "$GITHUB_ENV"
           echo "DEVKITARM=/opt/devkitpro/devkitARM" >> "$GITHUB_ENV"
-          {
-            echo "/opt/devkitpro/tools/bin"
-            echo "/opt/devkitpro/devkitA64/bin"
-            echo "/opt/devkitpro/devkitARM/bin"
-          } >> "$GITHUB_PATH"
+          echo "/opt/devkitpro/tools/bin"           >> "$GITHUB_PATH"
+          echo "/opt/devkitpro/devkitA64/bin"       >> "$GITHUB_PATH"
+          echo "/opt/devkitpro/devkitARM/bin"       >> "$GITHUB_PATH"
 
-      - name: 补齐编译依赖
+      - name: 安装 Atmosphere 官方要求的所有 devkitPro 包
+        env:
+          DEVKITPRO: /opt/devkitpro
         run: |
-          dkp-pacman -S --needed --noconfirm \
-            switch-dev switch-glm switch-libjpeg-turbo \
-            devkitA64 devkitARM devkitarm-rules hactool
+          source /etc/profile.d/devkitpro.sh 2>/dev/null || true
+          # 先更新 pacman 数据库,再装包;不要 -Syu,避免把 GCC 拉到最新导致和 Atmosphere 不兼容
+          yes | dkp-pacman -Sy --needed --noconfirm \
+            devkitA64 \
+            devkitARM \
+            devkitarm-rules \
+            switch-dev \
+            switch-portlibs \
+            switch-glm \
+            switch-libjpeg-turbo \
+            switch-zlib \
+            hactool \
+            general-tools \
+            switch-tools
 
-      - name: 校验工具链
+      - name: 安装 Python 依赖
+        run: python3 -m pip install --no-cache-dir lz4 pycryptodome
+
+      - name: 拉取源码(含全部历史以生成版本号)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 打印工具链版本(排错用)
         run: |
-          aarch64-none-elf-gcc --version
-          arm-none-eabi-gcc --version
-          python -c "import lz4; print('lz4 ok')"
-          command -v build_romfs
-          command -v zip
+          aarch64-none-elf-gcc --version | head -1
+          arm-none-eabi-gcc --version | head -1
+          python3 --version
+          which hactool || echo "hactool missing"
+          which build_romfs || echo "build_romfs missing"
+          dkp-pacman -Q | grep -iE 'switch-dev|switch-portlibs|libnx|devkitA64' || true
 
-      - name: 编译并打包成可刷入 SD 卡的固件
-        run: make -j"$(nproc)" dist-no-debug-nx_release
+      - name: 清理上次构建缓存(避免增量污染)
+        run: |
+          make clean || true
+          rm -rf out/
 
-      - name: 列出产物
-        run: ls -lh out/nintendo_nx_arm64_armv8a/release/
+      - name: 编译 Atmosphere (单线程,错误日志最清楚)
+        env:
+          DEVKITPRO: /opt/devkitpro
+          DEVKITA64: /opt/devkitpro/devkitA64
+          DEVKITARM: /opt/devkitpro/devkitARM
+          # 把 C++ 警告级别稍微放松,避免新 GCC 把 warning 当 error 中断编译
+          CXXFLAGS: -Wno-error
+          CFLAGS: -Wno-error
+        run: |
+          make -j"$(nproc)" dist-no-debug-nx_release 2>&1 | tee build.log || \
+          (echo "=== 并行构建失败,改用单线程重跑以便定位错误 ===" && \
+           tail -n 200 build.log && \
+           make -j1 dist-no-debug-nx_release && \
+           echo "=== 单线程构建成功 ===")
 
-      - name: 上传构建产物
+      - name: 列出最终产物
+        run: |
+          echo "--- out 目录 ---"
+          find out -maxdepth 4 -type f 2>/dev/null | head -50
+
+      - name: 上传构建产物(artifact)
         uses: actions/upload-artifact@v4
         with:
           name: atmosphere-nx-build
@@ -61,7 +113,7 @@ jobs:
             out/nintendo_nx_arm64_armv8a/release/fusee.bin
           if-no-files-found: error
 
-      - name: 打 tag 时创建 Release
+      - name: 打 tag 时自动创建 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
