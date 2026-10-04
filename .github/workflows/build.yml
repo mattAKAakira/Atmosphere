@@ -1,14 +1,30 @@
-name: Build Atmosphere
+name: Build Atmosphere Full Package
 
 on:
-  push:
-    branches:
-      - master
-      - feature-integration
-    paths-ignore:
-      - 'Dockerfile'
-      - '.github/workflows/image.yml'
+  workflow_dispatch:
 
 jobs:
-  build-workflow:
-    uses: ./.github/workflows/build-jobs.yaml
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm python2 python2-pip zip
+          python2 -m pip install lz4
+
+      - name: Build full distribution
+        run: make dist -j$(nproc)
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: atmosphere-full
+          path: out/
