@@ -79,7 +79,6 @@ jobs:
           set -e
           echo "== 检测到工具链缺失, 开始安装 =="
           export DEVKITPRO=/opt/devkitpro
-          # 先尝试 dkp-pacman, 不存在就用 pacman
           PACMAN=dkp-pacman
           command -v dkp-pacman >/dev/null 2>&1 || PACMAN=pacman
           echo "使用包管理器: $PACMAN"
@@ -102,7 +101,6 @@ jobs:
         id: env
         run: |
           set -e
-          # 查找编译器位置
           A64_GCC=$(find /opt/devkitpro -type f -name 'aarch64-none-elf-gcc' 2>/dev/null | head -1)
           if [ -z "$A64_GCC" ]; then
             echo "FATAL: 安装后仍找不到 aarch64-none-elf-gcc"
@@ -175,35 +173,70 @@ jobs:
           echo "== 你 fork 相对上游 master 的改动文件 (应包含你修改过的文件) =="
           git diff --stat upstream/master...HEAD 2>/dev/null | tail -50
 
-      - name: 清理旧产物
-        run: make clean && rm -rf out/
-        continue-on-error: true
-
-      - name: 编译 (并行)
-        id: build_parallel
-        if: ${{ inputs.no_werror }}
-        run: make -j"$(nproc)" -O dist-no-debug-nx_release ATMOSPHERE_CXXFLAGS="-Wno-error" ATMOSPHERE_CFLAGS="-Wno-error"
-        continue-on-error: true
-
-      - name: 编译 (并行, 保留警告即错误)
-        id: build_parallel_strict
-        if: ${{ !inputs.no_werror }}
-        run: make -j"$(nproc)" -O dist-no-debug-nx_release
-        continue-on-error: true
-
-      - name: 并行失败则单线程重跑以拿到干净报错
-        if: |
-          (steps.build_parallel.outcome == 'failure') ||
-          (steps.build_parallel_strict.outcome == 'failure')
+      - name: 🔍 校验出错文件内容 (确认就是你修改的版本)
         run: |
-          echo "== 并行构建失败, 单线程重跑以输出完整错误信息 =="
-          if [ "${{ inputs.no_werror }}" = "true" ]; then
-            make -j1 dist-no-debug-nx_release ATMOSPHERE_CXXFLAGS="-Wno-error" ATMOSPHERE_CFLAGS="-Wno-error"
+          set +e
+          echo "== 查找出错文件 actmon_api 位置 =="
+          ACTMON_FILE=$(find . -name "actmon_api*" -type f | grep -E '\.(c|cpp|h|hpp)$' | head -1)
+          echo "找到文件: $ACTMON_FILE"
+          if [ -f "$ACTMON_FILE" ]; then
+            echo ""
+            echo "== 文件最后一次修改记录 =="
+            git log -1 --format="commit: %H%nauthor: %an <%ae>%ndate:   %ci%nsubject: %s" -- "$ACTMON_FILE"
+            echo ""
+            echo "== 文件第 220-260 行 (238行附近, 就是你改的位置) =="
+            nl -ba "$ACTMON_FILE" | sed -n '220,260p'
+            echo ""
+            echo "== git blame 第 238 行 (谁改的/哪个提交改的) =="
+            git blame -L 238,238 -- "$ACTMON_FILE"
           else
-            make -j1 dist-no-debug-nx_release
+            echo "未找到 actmon_api 文件, 可能路径不对, 列出所有相关文件:"
+            find . -name "*actmon*" -type f
           fi
 
+      - name: 清理旧产物
+        run: make clean && rm -rf out/ build.log
+        continue-on-error: true
+
+      - name: 🔨 单线程编译 (输出完整日志到文件, 避免截断)
+        id: build
+        run: |
+          set +e
+          echo "== 开始单线程编译, 完整日志写入 build.log =="
+          BUILD_FLAGS=""
+          if [ "${{ inputs.no_werror }}" = "true" ]; then
+            BUILD_FLAGS="ATMOSPHERE_CXXFLAGS=-Wno-error ATMOSPHERE_CFLAGS=-Wno-error"
+          fi
+          # tee 同时输出到屏幕和文件
+          make -j1 -O dist-no-debug-nx_release $BUILD_FLAGS 2>&1 | tee build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo "build_exit_code=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "== 编译完成, exit code: $BUILD_EXIT =="
+          exit $BUILD_EXIT
+        continue-on-error: true
+
+      - name: ❌ 编译失败时打印错误附近内容
+        if: steps.build.outputs.build_exit_code != '0'
+        run: |
+          echo "== 编译失败! 打印错误最后 200 行 (避免日志截断) =="
+          echo "----------------------------------------------------------------"
+          tail -200 build.log
+          echo "----------------------------------------------------------------"
+          echo ""
+          echo "== 错误行汇总 (包含 error: 关键字的行) =="
+          grep -n -i "error:" build.log | head -30
+
+      - name: 上传完整编译日志 (方便排查)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
       - name: 列出产物
+        if: steps.build.outputs.build_exit_code == '0'
         run: |
           echo "== 产物目录 =="
           ls -lh out/nintendo_nx_arm64_armv8a/release/
@@ -214,6 +247,7 @@ jobs:
           done
 
       - name: 上传构建产物
+        if: steps.build.outputs.build_exit_code == '0'
         uses: actions/upload-artifact@v4
         with:
           name: atmosphere-nx-build
@@ -223,7 +257,7 @@ jobs:
           if-no-files-found: error
 
       - name: 打 tag 时创建 Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.build.outputs.build_exit_code == '0'
         uses: softprops/action-gh-release@v2
         with:
           files: |
