@@ -1,110 +1,127 @@
-name: Build Atmosphere
+name: 编译大气层核心 (Atmosphere)
 
+# 触发方式:
+#   1) 手动: Actions 页面 -> Build Atmosphere -> Run workflow
+#   2) 打 tag(如 v1.12.0)并推送时自动构建,成功后自动创建 Release
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要编译的分支/标签/提交。留空=用页面上选的那个分支。示例: master 或 你的分支名 或 v1.12.0"
+        required: false
+        default: ""
+      image_tag:
+        description: "devkitA64 镜像版本(固定工具链用)。可填 latest,或填日期如 20260704"
+        required: false
+        default: "latest"
+      no_werror:
+        description: "当报错里出现 [-Werror=...] 时勾选:把警告降级,不再中断构建"
+        required: false
+        type: boolean
+        default: false
   push:
-    tags: ['v*']          # 打 v 开头的 tag 时自动构建
-  workflow_dispatch:      # 也支持在 Actions 页面手动触发
+    tags: ["v*", "[0-9]*"]
 
 permissions:
-  contents: write         # 打 tag 时需要创建 Release
+  contents: write          # 打 tag 时需要写 Release
 
 jobs:
   build:
-    name: 编译大气层核心
+    name: 编译并打包
     runs-on: ubuntu-latest
+
+    # 官方 devkitA64 镜像内部已装好 devkitA64 / devkitARM / switch-dev /
+    # switch-portlibs(含 switch-glm、switch-libjpeg-turbo)/ hactool / zip / python3-lz4。
+    # 用它就不需要访问 apt.devkitpro.org,从根上避开 wget 403 的问题。
+    # 标签格式为 latest 或日期(YYYYMMDD),可用来把工具链固定在某个确定版本。
     container:
-      # 关键:不要用 devkita64:latest,它会随着 devkitPro 上游滚动更新
-      # 导致新 GCC/新 libnx 与 Atmosphere 源码不兼容。
-      # 官方构建文档基于 Debian/Ubuntu 环境,这里用 ubuntu 基础镜像手动装工具链,
-      # 依赖版本由 dkp-pacman 的 sysupgrade 固定,完全可控。
-      image: ubuntu:22.04
+      image: devkitpro/devkita64:${{ github.event.inputs.image_tag || 'latest' }}
 
     steps:
-      - name: 安装基础工具
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            ca-certificates curl gpg gzip bzip2 xz-utils make \
-            git python3 python3-pip unzip zip rsync wget \
-            libarchive-tools build-essential coreutils pkg-config \
-          && rm -rf /var/lib/apt/lists/*
-
-      - name: 安装 devkitPro pacman 与 devkitA64 工具链
-        run: |
-          wget -q https://apt.devkitpro.org/install-devkitpro-pacman -O /tmp/install-dkp.sh
-          chmod +x /tmp/install-dkp.sh
-          DEBIAN_FRONTEND=noninteractive /tmp/install-dkp.sh
-          rm /tmp/install-dkp.sh
-
-          # 写 devkitPro 环境变量,后续步骤直接生效
-          echo "DEVKITPRO=/opt/devkitpro"        >> "$GITHUB_ENV"
-          echo "DEVKITA64=/opt/devkitpro/devkitA64" >> "$GITHUB_ENV"
-          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> "$GITHUB_ENV"
-          echo "/opt/devkitpro/tools/bin"           >> "$GITHUB_PATH"
-          echo "/opt/devkitpro/devkitA64/bin"       >> "$GITHUB_PATH"
-          echo "/opt/devkitpro/devkitARM/bin"       >> "$GITHUB_PATH"
-
-      - name: 安装 Atmosphere 官方要求的所有 devkitPro 包
-        env:
-          DEVKITPRO: /opt/devkitpro
-        run: |
-          source /etc/profile.d/devkitpro.sh 2>/dev/null || true
-          # 先更新 pacman 数据库,再装包;不要 -Syu,避免把 GCC 拉到最新导致和 Atmosphere 不兼容
-          yes | dkp-pacman -Sy --needed --noconfirm \
-            devkitA64 \
-            devkitARM \
-            devkitarm-rules \
-            switch-dev \
-            switch-portlibs \
-            switch-glm \
-            switch-libjpeg-turbo \
-            switch-zlib \
-            hactool \
-            general-tools \
-            switch-tools
-
-      - name: 安装 Python 依赖
-        run: python3 -m pip install --no-cache-dir lz4 pycryptodome
-
-      - name: 拉取源码(含全部历史以生成版本号)
+      # 关键:显式声明从"触发本工作流的仓库"(即你的 fork)取源码。
+      # 不写 repository 时默认也是它,但写出来可以杜绝误指向上游仓库。
+      - name: 拉取源码(来自你自己的 fork)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: ${{ github.repository }}                     # = 你自己的 fork
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0                                           # 产物文件名要用到 git 提交号
+
+      - name: 校验源码确实来自你的 fork(而不是上游)
+        shell: bash
+        run: |
+          set -e
+          echo "== 触发本工作流的仓库 =="
+          echo "${{ github.repository }}"
+          echo
+          echo "== 本地 origin 实际指向 =="
+          git remote -v
+          echo
+          if git remote get-url origin | grep -q "${{ github.repository }}"; then
+            echo "OK:源码来自 ${{ github.repository }}"
+          else
+            echo "::error::origin 指向的不是你的 fork,源码可能取错,已中断构建"
+            exit 1
+          fi
+          echo
+          echo "== 本次构建的提交(这就是最终被编译进去的那份代码) =="
+          git log -1 --format='commit  %H%nauthor  %an <%ae>%ndate    %ad%nsubject %s'
+          echo
+          echo "== 分支 / 版本 =="
+          git rev-parse --abbrev-ref HEAD
+          git describe --tags --always 2>/dev/null || true
 
       - name: 打印工具链版本(排错用)
+        shell: bash
         run: |
+          echo "== 镜像标签 =="
+          echo "${{ github.event.inputs.image_tag || 'latest' }}"
+          echo "== 编译器版本 =="
           aarch64-none-elf-gcc --version | head -1
           arm-none-eabi-gcc --version | head -1
-          python3 --version
-          which hactool || echo "hactool missing"
-          which build_romfs || echo "build_romfs missing"
-          dkp-pacman -Q | grep -iE 'switch-dev|switch-portlibs|libnx|devkitA64' || true
+          echo "== devkitPro 关键包版本 =="
+          dkp-pacman -Q devkitA64 2>/dev/null || true
+          dkp-pacman -Q switch-dev 2>/dev/null || true
+          dkp-pacman -Q libnx 2>/dev/null || true
 
-      - name: 清理上次构建缓存(避免增量污染)
+      # 可选:想确认"我改的那几个文件到底有没有被编进去",看这一步的输出即可。
+      - name: 展示你的改动相对上游的差异(确认改动已包含)
+        shell: bash
+        continue-on-error: true
         run: |
-          make clean || true
-          rm -rf out/
+          git remote add upstream https://github.com/Atmosphere-NX/Atmosphere.git 2>/dev/null || true
+          git fetch --no-tags --depth=1 upstream master 2>/dev/null || true
+          echo "== 你的分支相对上游 master 的差异(应能看到你修改的那几个文件) =="
+          git diff --stat upstream/master..HEAD 2>/dev/null || echo "(无法对比上游,跳过此步)"
 
-      - name: 编译 Atmosphere (单线程,错误日志最清楚)
-        env:
-          DEVKITPRO: /opt/devkitpro
-          DEVKITA64: /opt/devkitpro/devkitA64
-          DEVKITARM: /opt/devkitpro/devkitARM
-          # 把 C++ 警告级别稍微放松,避免新 GCC 把 warning 当 error 中断编译
-          CXXFLAGS: -Wno-error
-          CFLAGS: -Wno-error
+      - name: 编译并打包成可刷入 SD 卡的固件
+        shell: bash
         run: |
-          make -j"$(nproc)" dist-no-debug-nx_release 2>&1 | tee build.log || \
-          (echo "=== 并行构建失败,改用单线程重跑以便定位错误 ===" && \
-           tail -n 200 build.log && \
-           make -j1 dist-no-debug-nx_release && \
-           echo "=== 单线程构建成功 ===")
+          set -o pipefail
 
-      - name: 列出最终产物
-        run: |
-          echo "--- out 目录 ---"
-          find out -maxdepth 4 -type f 2>/dev/null | head -50
+          # 可选开关:libstratosphere 等模块内置 -Wextra -Werror。
+          # ATMOSPHERE_CXXFLAGS 会被拼在 CXXFLAGS 的最后,排在 -Werror 之后,
+          # 所以在这里追加 -Wno-error 就能把"警告当错误"降级(仅对 C++ 源文件生效)。
+          # 取值与 common.mk 第 47 行的官方定义保持一致,只是末尾多一个 -Wno-error。
+          WERROR_ARG=""
+          if [ "${{ github.event.inputs.no_werror }}" = "true" ]; then
+            WERROR_ARG="ATMOSPHERE_CXXFLAGS=-fno-rtti -fno-exceptions -std=gnu++23 -Wno-invalid-offsetof -Wno-error"
+          fi
 
-      - name: 上传构建产物(artifact)
+          # -O (--output-sync) 让每个文件的编译输出成组打印,报错不会被并行日志冲散,
+          # 避免只看到 "Error 1" 而看不到真正的那一行 error:。
+          if make -j"$(nproc)" -O $WERROR_ARG dist-no-debug-nx_release; then
+            echo "::notice::编译成功"
+          else
+            echo "::warning::并行编译失败,改用单线程重跑一次,以便拿到完整报错"
+            make -O $WERROR_ARG dist-no-debug-nx_release
+          fi
+
+      - name: 列出产物
+        shell: bash
+        run: ls -lh out/nintendo_nx_arm64_armv8a/release/
+
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: atmosphere-nx-build
@@ -113,7 +130,7 @@ jobs:
             out/nintendo_nx_arm64_armv8a/release/fusee.bin
           if-no-files-found: error
 
-      - name: 打 tag 时自动创建 Release
+      - name: 打 tag 时创建 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
