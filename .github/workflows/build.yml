@@ -47,6 +47,15 @@ jobs:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0                                           # 产物文件名要用到 git 提交号
 
+      # Docker 容器内工作目录的属主与当前进程用户可能不一致,
+      # Git 2.35+ 对此会抛 "dubious ownership" 错误(exit 128),
+      # 不仅校验步骤会挂,构建脚本里的 git rev-parse(用于生成版本号)也会挂。
+      # 必须在 checkout 之后、任何 git 命令(包括 make 内部调用)之前配置好。
+      - name: 允许 Git 在容器内操作工作区
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+
       - name: 校验源码确实来自你的 fork(而不是上游)
         shell: bash
         run: |
