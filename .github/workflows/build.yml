@@ -1,0 +1,29 @@
+name: Build Atmosphere Dist
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Python 2 and lz4
+        run: |
+          pacman -Syu --noconfirm python2 python2-pip zip
+          python2 -m pip install lz4
+
+      - name: Build Dist
+        run: make dist -j$(nproc)
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: atmosphere-dist
+          path: out/
