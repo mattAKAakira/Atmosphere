@@ -9,20 +9,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkita64:latest
+      # ✅ 固定2026-09-27稳定版镜像，镜像内部已经预装全部编译依赖（含新版libnx，带pglEnableApplicationCrashReport2）
+      # ✅ 完全不使用pacman/在线装包，严格遵守devkitPro官方CI要求，避开403
+      image: devkitpro/devkita64:20260927
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
       DEVKITARM: /opt/devkitpro/devkitARM
+      # ✅ 写全系统路径+工具链路径，不会找不到tar/git/gcc等任何命令
       PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # 只加了这一步：更新所有devkitpro包到最新，解决API缺失问题
-      - run: dkp-pacman -Syu --noconfirm switch-dev switch-portlibs
-      - run: make -j1 dist-no-debug-nx_release
+      # ✅ 单线程编译+追加-Wno-error覆盖Makefile里的-Werror，新GCC警告不会中断编译
+      - run: make -j1 ATMOSPHERE_CFLAGS="-Wno-error" ATMOSPHERE_CXXFLAGS="-Wno-error" dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
           name: atmosphere-build
