@@ -1,32 +1,14 @@
 name: Build Atmosphere
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - feature-integration
+    paths-ignore:
+      - 'Dockerfile'
+      - '.github/workflows/image.yml'
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkita64:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Install Build Dependencies
-        run: |
-          # 安装 Python 2 和 pip
-          pacman -Syu --noconfirm python2 python2-pip
-          # 使用 Python 2 的 pip 安装 lz4 库
-          python2 -m pip install lz4
-
-      - name: Build
-        run: make -j$(nproc) package3
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: atmosphere-package3
-          path: out/atmosphere/package3
+  build-workflow:
+    uses: ./.github/workflows/build-jobs.yaml
