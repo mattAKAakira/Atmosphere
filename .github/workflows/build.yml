@@ -1,272 +1,32 @@
 name: Build Atmosphere
-
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: 'devkita64 镜像标签 (latest / YYYYMMDD)'
-        required: false
-        default: 'latest'
-        type: string
-      no_werror:
-        description: '关闭 -Werror (新版GCC警告不中止编译)'
-        required: false
-        default: true
-        type: boolean
-      ref:
-        description: '构建目标 ref (留空用触发分支, 或填分支/tag/commit 钉死)'
-        required: false
-        default: ''
-        type: string
-
 permissions:
   contents: write
-
 jobs:
   build:
-    name: 编译大气层核心
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkita64:${{ inputs.image_tag || 'latest' }}
-
+      image: devkitpro/devkita64:latest
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITA64: /opt/devkitpro/devkitA64
+      DEVKITARM: /opt/devkitpro/devkitARM
+      PATH: /opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin:${PATH}
     steps:
-      - name: 拉取源码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository }}
-          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
-
-      - name: 允许 Git 在容器内操作工作区
-        run: git config --global --add safe.directory '*'
-
-      - name: 探查镜像实际内容
-        id: probe
-        run: |
-          set +e
-          echo "== 当前用户 =="
-          id
-          echo "== 默认 PATH =="
-          echo "$PATH"
-          echo "== DEVKITPRO 环境变量 =="
-          env | grep -i devkit || echo "(无 DEVKITPRO 环境变量)"
-          echo "== /opt 目录 =="
-          ls -la /opt/ 2>/dev/null | head -30
-          echo "== /opt/devkitpro 目录(若存在) =="
-          ls -la /opt/devkitpro/ 2>/dev/null || echo "(/opt/devkitpro 不存在)"
-          echo "== 查找所有 aarch64 gcc 二进制 =="
-          GCC_PATH=$(find / -type f -name 'aarch64-none-elf-gcc' 2>/dev/null | head -1)
-          if [ -n "$GCC_PATH" ]; then
-            echo "找到 aarch64 编译器: $GCC_PATH"
-            GCC_DIR=$(dirname "$GCC_PATH")
-            echo "gcc_dir=$GCC_DIR" >> "$GITHUB_OUTPUT"
-          else
-            echo "未找到 aarch64-none-elf-gcc, 后续将自动安装"
-            echo "gcc_dir=NOT_FOUND" >> "$GITHUB_OUTPUT"
-          fi
-          echo "== 查找所有 arm gcc 二进制 =="
-          find / -type f -name 'arm-none-eabi-gcc' 2>/dev/null | head -3
-          echo "== 查找 pacman =="
-          which dkp-pacman 2>/dev/null || which pacman 2>/dev/null || echo "未找到 pacman"
-          echo "== 查找 profile 脚本 =="
-          cat /etc/profile.d/devkitpro.sh 2>/dev/null || echo "(无 devkitpro.sh profile)"
-
-      - name: 自动安装/补全 devkitPro 工具链
-        if: steps.probe.outputs.gcc_dir == 'NOT_FOUND'
-        run: |
-          set -e
-          echo "== 检测到工具链缺失, 开始安装 =="
-          export DEVKITPRO=/opt/devkitpro
-          PACMAN=dkp-pacman
-          command -v dkp-pacman >/dev/null 2>&1 || PACMAN=pacman
-          echo "使用包管理器: $PACMAN"
-          $PACMAN -Syu --noconfirm 2>&1 | tail -20 || true
-          $PACMAN -S --needed --noconfirm \
-            devkitA64 \
-            devkitARM \
-            devkitarm-rules \
-            switch-dev \
-            switch-portlibs \
-            switch-glm \
-            switch-libjpeg-turbo \
-            switch-zlib \
-            hactool \
-            general-tools \
-            pkg-config
-          echo "== 安装完成 =="
-
-      - name: 查找编译器并注入环境变量
-        id: env
-        run: |
-          set -e
-          A64_GCC=$(find /opt/devkitpro -type f -name 'aarch64-none-elf-gcc' 2>/dev/null | head -1)
-          if [ -z "$A64_GCC" ]; then
-            echo "FATAL: 安装后仍找不到 aarch64-none-elf-gcc"
-            find /opt/devkitpro -type f 2>/dev/null | head -50
-            exit 1
-          fi
-          A64_BIN=$(dirname "$A64_GCC")
-          ARM_GCC=$(find /opt/devkitpro -type f -name 'arm-none-eabi-gcc' 2>/dev/null | head -1)
-          ARM_BIN=$(dirname "$ARM_GCC")
-          TOOLS_BIN="/opt/devkitpro/tools/bin"
-          PORTLIBS_BIN="/opt/devkitpro/portlibs/switch/bin"
-
-          echo "DEVKITPRO=/opt/devkitpro" >> "$GITHUB_ENV"
-          echo "DEVKITA64=/opt/devkitpro/devkitA64" >> "$GITHUB_ENV"
-          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> "$GITHUB_ENV"
-          echo "ATMOSPHERE_DEVKITPRO_DIR=/opt/devkitpro" >> "$GITHUB_ENV"
-          echo "PATH=${A64_BIN}:${ARM_BIN}:${TOOLS_BIN}:${PORTLIBS_BIN}:${PATH}" >> "$GITHUB_ENV"
-          
-          echo "a64_bin=$A64_BIN" >> "$GITHUB_OUTPUT"
-          echo "arm_bin=$ARM_BIN" >> "$GITHUB_OUTPUT"
-          echo "tools_bin=$TOOLS_BIN" >> "$GITHUB_OUTPUT"
-
-      - name: 安装 Python 依赖
-        run: |
-          python3 -m pip install --break-system-packages lz4 pycryptodome 2>/dev/null || pip install lz4 pycryptodome 2>/dev/null || echo "pip 安装失败, 镜像可能已自带, 继续尝试"
-
-      - name: 校验工具链
-        run: |
-          echo "== 镜像标签 =="
-          echo "${{ inputs.image_tag || 'latest' }}"
-          echo "== PATH =="
-          echo "$PATH"
-          echo "== 编译器版本 =="
-          aarch64-none-elf-gcc --version
-          arm-none-eabi-gcc --version
-          echo "== 工具检查 =="
-          command -v build_romfs
-          command -v hactool
-          command -v elf2nro
-          command -v zip
-          echo "== Python 依赖 =="
-          python3 -c "import lz4; print('lz4 ok')"
-          python3 -c "import Crypto; print('pycryptodome ok')" 2>/dev/null || echo "pycryptodome 可选, 跳过"
-
-      - name: 校验源码确实来自你的 fork
-        run: |
-          set -e
-          echo "== 触发本工作流的仓库 =="
-          echo "${{ github.repository }}"
-          echo "== 本地 origin 实际指向 =="
-          LOCAL_ORIGIN=$(git remote get-url origin)
-          echo "$LOCAL_ORIGIN"
-          if echo "$LOCAL_ORIGIN" | grep -q -i "${{ github.repository_owner }}"; then
-            echo "✅ 源码来源校验通过"
-          else
-            echo "❌ origin 不匹配, 可能意外指向了上游仓库, 中止构建"
-            exit 1
-          fi
-          echo "== 本次提交信息 =="
-          git log -1 --format="commit: %H%nauthor: %an <%ae>%ndate:   %ci%nsubject: %s"
-          echo "== 对应 git describe (将出现在产物名里) =="
-          git describe --tags --always --dirty 2>/dev/null || echo "(无 tag, 使用短哈希)"
-
-      - name: 展示你的改动相对上游的差异 (确认你修改的文件已包含)
-        run: |
-          set +e
-          UPSTREAM="https://github.com/Atmosphere-NX/Atmosphere.git"
-          git remote add upstream "$UPSTREAM" 2>/dev/null || true
-          git fetch upstream master --depth=50 -q 2>/dev/null
-          echo "== 你 fork 相对上游 master 的改动文件 (应包含你修改过的文件) =="
-          git diff --stat upstream/master...HEAD 2>/dev/null | tail -50
-
-      - name: 🔍 校验出错文件内容 (确认就是你修改的版本)
-        run: |
-          set +e
-          echo "== 查找出错文件 actmon_api 位置 =="
-          ACTMON_FILE=$(find . -name "actmon_api*" -type f | grep -E '\.(c|cpp|h|hpp)$' | head -1)
-          echo "找到文件: $ACTMON_FILE"
-          if [ -f "$ACTMON_FILE" ]; then
-            echo ""
-            echo "== 文件最后一次修改记录 =="
-            git log -1 --format="commit: %H%nauthor: %an <%ae>%ndate:   %ci%nsubject: %s" -- "$ACTMON_FILE"
-            echo ""
-            echo "== 文件第 220-260 行 (238行附近, 就是你改的位置) =="
-            nl -ba "$ACTMON_FILE" | sed -n '220,260p'
-            echo ""
-            echo "== git blame 第 238 行 (谁改的/哪个提交改的) =="
-            git blame -L 238,238 -- "$ACTMON_FILE"
-          else
-            echo "未找到 actmon_api 文件, 可能路径不对, 列出所有相关文件:"
-            find . -name "*actmon*" -type f
-          fi
-
-      - name: 清理旧产物
-        run: make clean && rm -rf out/ build.log
-        continue-on-error: true
-
-      - name: 🔨 单线程编译 (输出完整日志到文件, 避免截断)
-        id: build
-        run: |
-          set +e
-          echo "== 开始单线程编译, 完整日志写入 build.log =="
-          BUILD_FLAGS=""
-          if [ "${{ inputs.no_werror }}" = "true" ]; then
-            BUILD_FLAGS="ATMOSPHERE_CXXFLAGS=-Wno-error ATMOSPHERE_CFLAGS=-Wno-error"
-          fi
-          # tee 同时输出到屏幕和文件
-          make -j1 -O dist-no-debug-nx_release $BUILD_FLAGS 2>&1 | tee build.log
-          BUILD_EXIT=${PIPESTATUS[0]}
-          echo "build_exit_code=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
-          echo ""
-          echo "== 编译完成, exit code: $BUILD_EXIT =="
-          exit $BUILD_EXIT
-        continue-on-error: true
-
-      - name: ❌ 编译失败时打印错误附近内容
-        if: steps.build.outputs.build_exit_code != '0'
-        run: |
-          echo "== 编译失败! 打印错误最后 200 行 (避免日志截断) =="
-          echo "----------------------------------------------------------------"
-          tail -200 build.log
-          echo "----------------------------------------------------------------"
-          echo ""
-          echo "== 错误行汇总 (包含 error: 关键字的行) =="
-          grep -n -i "error:" build.log | head -30
-
-      - name: 上传完整编译日志 (方便排查)
-        if: always()
-        uses: actions/upload-artifact@v4
+      - run: git config --global --add safe.directory '*'
+      - run: make -j1 dist-no-debug-nx_release
+      - uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
-          if-no-files-found: ignore
-
-      - name: 列出产物
-        if: steps.build.outputs.build_exit_code == '0'
-        run: |
-          echo "== 产物目录 =="
-          ls -lh out/nintendo_nx_arm64_armv8a/release/
-          echo "== ZIP 内容预览 =="
-          for z in out/nintendo_nx_arm64_armv8a/release/*.zip; do
-            echo "--- $z ---"
-            unzip -l "$z" | head -30
-          done
-
-      - name: 上传构建产物
-        if: steps.build.outputs.build_exit_code == '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: atmosphere-nx-build
-          path: |
-            out/nintendo_nx_arm64_armv8a/release/*.zip
-            out/nintendo_nx_arm64_armv8a/release/fusee.bin
-          if-no-files-found: error
-
-      - name: 打 tag 时创建 Release
-        if: startsWith(github.ref, 'refs/tags/') && steps.build.outputs.build_exit_code == '0'
+          name: atmosphere-build
+          path: out/nintendo_nx_arm64_armv8a/release/*
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            out/nintendo_nx_arm64_armv8a/release/*.zip
-            out/nintendo_nx_arm64_armv8a/release/fusee.bin
-          generate_release_notes: true
-          body: |
-            ## 构建信息
-            - **仓库**: ${{ github.repository }}
-            - **提交**: ${{ github.sha }}
-            - **构建来源**: GitHub Actions 自动构建
-            - **镜像**: devkitpro/devkita64:${{ inputs.image_tag || 'latest' }}
+          files: out/nintendo_nx_arm64_armv8a/release/*
