@@ -14,13 +14,14 @@ jobs:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
       DEVKITARM: /opt/devkitpro/devkitARM
-      # 显式写全系统路径+devkitpro路径，绝对不丢基础命令
       PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
+      # 只加了这一步：更新所有devkitpro包到最新，解决API缺失问题
+      - run: dkp-pacman -Syu --noconfirm switch-dev switch-portlibs
       - run: make -j1 dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
