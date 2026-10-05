@@ -20,12 +20,15 @@ jobs:
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 只加了LDFLAGS="-lsupc++ -lstdc++"解决C++ ABI符号缺失的链接错误，其他参数不变
+      # ✅ 修正：用标准变量名+根因修复
+      #   1. 加-fno-rtti -fno-exceptions：裸机bootloader不需要RTTI/异常，从根源不生成__si_class_type_info引用
+      #   2. 用make内置LDLIBS变量传链接库，自动放在链接命令最后，顺序正确，不会被忽略
+      #   3. 去掉不存在的自定义变量名，保证所有参数被构建系统识别
       - run: |
           make -j1 \
             ATMOSPHERE_CFLAGS="-std=gnu2x -Wno-error" \
-            ATMOSPHERE_CXXFLAGS="-std=gnu++20 -Wno-error -I./libraries/libstratosphere/include -I./libraries/libvapours/include" \
-            ATMOSPHERE_LDFLAGS="-lsupc++ -lstdc++" \
+            ATMOSPHERE_CXXFLAGS="-std=gnu++20 -Wno-error -fno-rtti -fno-exceptions" \
+            LDLIBS="-lsupc++ -lstdc++ -lgcc" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
