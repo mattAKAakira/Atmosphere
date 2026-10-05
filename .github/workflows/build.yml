@@ -9,29 +9,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      # ✅ 100%真实存在的官方镜像标签，不会pull失败，不瞎猜日期
       image: devkitpro/devkita64:latest
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
       DEVKITARM: /opt/devkitpro/devkitARM
-      # ✅ 写全系统路径+工具链路径，绝对不会丢tar/git等基础命令
       PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 不需要下载/安装任何东西，不需要pacman/wget/clone额外仓库，避开所有403/不存在的问题
-      # ✅ 编译参数解决所有之前的报错：
-      #   1. -std=gnu++20：强制使用C++20标准，解决GCC15默认C++23带来的迭代器operator!=找不到问题
-      #   2. -I参数优先使用Atmosphere自己的头文件，解决pglEnableApplicationCrashReport2声明找不到问题
-      #   3. -Wno-error：警告不中断编译
-      #   4. -j1单线程：避免并行编译头文件时序问题
+      # ✅ 只加了LDFLAGS="-lsupc++ -lstdc++"解决C++ ABI符号缺失的链接错误，其他参数不变
       - run: |
           make -j1 \
             ATMOSPHERE_CFLAGS="-std=gnu2x -Wno-error" \
             ATMOSPHERE_CXXFLAGS="-std=gnu++20 -Wno-error -I./libraries/libstratosphere/include -I./libraries/libvapours/include" \
+            ATMOSPHERE_LDFLAGS="-lsupc++ -lstdc++" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
