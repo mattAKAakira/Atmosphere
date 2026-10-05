@@ -1,43 +1,50 @@
-name: Build Atmosphere
+name: Build Atmosphere 1.12.0
+
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
+      # 使用一个较新的 devkitPro 镜像；若可用，建议固定到具体标签
       image: devkitpro/devkita64:latest
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
       DEVKITARM: /opt/devkitpro/devkitARM
-      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
+      PATH: /opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
     steps:
-      - uses: actions/checkout@v5
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip lz4
+          pip3 install lz4 pycryptodome
+
+      - name: 检出 Atmosphère 1.12.0 源码
+        uses: actions/checkout@v4
         with:
+          ref: 1.12.0
           fetch-depth: 0
-      - run: git config --global --add safe.directory '*'
-      # ✅ 自动找到旧pgl.h位置，用curl -L（跟随重定向，不会wget的exit code 8）下载libnx最新pgl.h直接覆盖
-      # ✅ 一次性补全所有缺失的pgl新API（pglCreateShellEvent、pglEnableApplicationCrashReport2等），不需要逐个加声明
-      # ✅ 只替换头文件，不需要编译整个libnx，不会403，GitHub raw地址CI环境100%可访问
-      - run: |
-          PGL_H=$(find /opt/devkitpro -name "pgl.h" -path "*/services/*" | head -1)
-          echo "旧pgl.h路径: $PGL_H"
-          curl -fL https://raw.githubusercontent.com/switchbrew/libnx/master/nx/include/switch/services/pgl.h -o "$PGL_H"
-          echo "已替换为最新版pgl.h"
-      - run: |
-          make -j1 \
-            USER_CFLAGS="-Wno-error" \
-            USER_CXXFLAGS="-Wno-error -fno-rtti -fno-exceptions" \
-            dist-no-debug-nx_release
-      - uses: actions/upload-artifact@v4
+          submodules: recursive
+
+      - name: 构建
+        run: |
+          make -j$(nproc) dist-no-debug-nx_release
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
         with:
-          name: atmosphere-build
+          name: atmosphere-1.12.0-build
           path: out/nintendo_nx_arm64_armv8a/release/*
-      - name: Create Release
+
+      - name: 创建 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
