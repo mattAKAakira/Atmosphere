@@ -9,7 +9,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      # ✅ 只用官方永远存在的latest标签，绝对不会pull失败
       image: devkitpro/devkita64:latest
     env:
       DEVKITPRO: /opt/devkitpro
@@ -21,12 +20,10 @@ jobs:
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 只加这一步：从GitHub拉最新版libnx（开源仓库，不会403）覆盖镜像里的旧版本，补上缺失的pglEnableApplicationCrashReport2等API
-      # ✅ 完全不碰apt.devkitpro.org/pkg.devkitpro.org，避开Cloudflare 403拦截
+      # ✅ 直接clone最新libnx源码编译安装，不用wget，不会有重定向/404问题，保证头文件和库是最新的，补上缺失的API
       - run: |
-          wget -q https://github.com/switchbrew/libnx/releases/latest/download/libnx-dev.tar.zst -O /tmp/libnx.tar.zst
-          tar -I zstd -xf /tmp/libnx.tar.zst -C $DEVKITPRO/portlibs/switch --strip-components=1
-      # ✅ 单线程编译 + -Wno-error覆盖-Werror，警告不会中断
+          git clone --depth=1 https://github.com/switchbrew/libnx /tmp/libnx
+          cd /tmp/libnx && make -j$(nproc) install
       - run: make -j1 ATMOSPHERE_CFLAGS="-Wno-error" ATMOSPHERE_CXXFLAGS="-Wno-error" dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
