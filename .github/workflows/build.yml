@@ -29,12 +29,17 @@ jobs:
           echo 'Result pglEnableApplicationCrashReport2(u64 pid, bool en) { (void)pid; (void)en; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEvent(PglEventObserver* obs, Event* ev) { (void)obs; (void)ev; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEventInfo(PglEventObserver* obs, PmProcessEventInfo* info) { (void)obs; (void)info; return 0; }' >> "$STUB"
-      # ✅ 只用官方存在的USER_CFLAGS/USER_CXXFLAGS，不编任何不存在的变量
-      # ✅ 加-Wno-uninitialized/-Wno-maybe-uninitialized，直接关掉LTO阶段的那两个警告
+          # ✅ 直接修复源码里的未初始化问题：把报错的两个变量零初始化，从根源消除警告，不需要关-Werror
+          # 1. 修复pgl_shell_api.cpp里的obs变量
+          sed -i 's/::PglEventObserver obs;/::PglEventObserver obs{};/g' libraries/libstratosphere/source/pgl/pgl_shell_api.cpp
+          # 2. 修复pgl_remote_event_observer.hpp里的ev变量（两处：Cmif和Tipc版本）
+          sed -i 's/::Event ev;/::Event ev{};/g' libraries/libstratosphere/source/pgl/pgl_remote_event_observer.hpp
+          echo "✅ 已修复所有未初始化变量"
+      # 编译参数回到最简，不需要加任何-Wno-*，变量初始化后不会有警告
       - run: |
           make -j1 \
-            USER_CFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized" \
-            USER_CXXFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized -fno-rtti -fno-exceptions" \
+            USER_CFLAGS="" \
+            USER_CXXFLAGS="-fno-rtti -fno-exceptions" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
