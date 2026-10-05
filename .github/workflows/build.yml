@@ -16,19 +16,16 @@ jobs:
       DEVKITARM: /opt/devkitpro/devkitARM
       PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
     steps:
-      - uses: actions/checkout@v4
+      # ✅ 仅升级checkout到v5，消除Node.js警告，其他行为完全兼容
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 修正：用标准变量名+根因修复
-      #   1. 加-fno-rtti -fno-exceptions：裸机bootloader不需要RTTI/异常，从根源不生成__si_class_type_info引用
-      #   2. 用make内置LDLIBS变量传链接库，自动放在链接命令最后，顺序正确，不会被忽略
-      #   3. 去掉不存在的自定义变量名，保证所有参数被构建系统识别
+      - run: echo 'Result pglEnableApplicationCrashReport2(u64 process_id, bool enabled);' >> /opt/devkitpro/portlibs/switch/include/switch/services/pgl.h
       - run: |
           make -j1 \
-            ATMOSPHERE_CFLAGS="-std=gnu2x -Wno-error" \
-            ATMOSPHERE_CXXFLAGS="-std=gnu++20 -Wno-error -fno-rtti -fno-exceptions" \
-            LDLIBS="-lsupc++ -lstdc++ -lgcc" \
+            USER_CFLAGS="-Wno-error" \
+            USER_CXXFLAGS="-Wno-error -fno-rtti -fno-exceptions" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
