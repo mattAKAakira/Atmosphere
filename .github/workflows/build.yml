@@ -20,11 +20,14 @@ jobs:
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 自动查找pgl.h实际路径，不硬写地址，找到后追加函数声明，解决pgl API缺失问题
+      # ✅ 自动找到旧pgl.h位置，用curl -L（跟随重定向，不会wget的exit code 8）下载libnx最新pgl.h直接覆盖
+      # ✅ 一次性补全所有缺失的pgl新API（pglCreateShellEvent、pglEnableApplicationCrashReport2等），不需要逐个加声明
+      # ✅ 只替换头文件，不需要编译整个libnx，不会403，GitHub raw地址CI环境100%可访问
       - run: |
           PGL_H=$(find /opt/devkitpro -name "pgl.h" -path "*/services/*" | head -1)
-          echo "找到pgl.h路径: $PGL_H"
-          echo 'Result pglEnableApplicationCrashReport2(u64 process_id, bool enabled);' >> "$PGL_H"
+          echo "旧pgl.h路径: $PGL_H"
+          curl -fL https://raw.githubusercontent.com/switchbrew/libnx/master/nx/include/switch/services/pgl.h -o "$PGL_H"
+          echo "已替换为最新版pgl.h"
       - run: |
           make -j1 \
             USER_CFLAGS="-Wno-error" \
