@@ -29,12 +29,12 @@ jobs:
           echo 'Result pglEnableApplicationCrashReport2(u64 pid, bool en) { (void)pid; (void)en; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEvent(PglEventObserver* obs, Event* ev) { (void)obs; (void)ev; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEventInfo(PglEventObserver* obs, PmProcessEventInfo* info) { (void)obs; (void)info; return 0; }' >> "$STUB"
-      # ✅ 只加USER_LDFLAGS把-Wno-error传到LTO链接阶段，额外关掉两个未初始化警告，其他参数完全不变
+      # ✅ 只用官方存在的USER_CFLAGS/USER_CXXFLAGS，不编任何不存在的变量
+      # ✅ 加-Wno-uninitialized/-Wno-maybe-uninitialized，直接关掉LTO阶段的那两个警告
       - run: |
           make -j1 \
             USER_CFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized" \
             USER_CXXFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized -fno-rtti -fno-exceptions" \
-            USER_LDFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
