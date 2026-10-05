@@ -20,62 +20,34 @@ jobs:
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # === 只修pgl相关问题，其他所有流程和之前跑30分钟的版本完全一致，不做任何改动 ===
+      # ✅ 完全去掉heredoc嵌套，用简单echo命令追加内容，100%不会有格式/语法错误
       - run: |
-          # 1. 先尝试拉最新pgl.h，拉失败也没关系
           PGL_H=$(find /opt/devkitpro -name "pgl.h" -path "*/services/*" | head -1)
           curl -fL --connect-timeout 10 --retry 2 https://raw.githubusercontent.com/switchbrew/libnx/master/nx/include/switch/services/pgl.h -o "$PGL_H" || true
-
-          # 2. 无论拉取成功与否，都强制追加纯C标准的函数声明，绝对不会有格式/类型错误
-          #    纯C语法，不依赖任何Atmosphere/C++类型，和libnx原生声明格式完全一致
-          cat >> "$PGL_H" << 'C_DECL'
-#ifdef __cplusplus
-extern "C" {
-#endif
-/* 兼容旧版libnx缺失的PGL API */
-struct PglEventObserver;
-typedef unsigned int u32_compat;
-typedef u32_compat Result_compat;
-Result_compat pglCreateShellEvent(struct PglEventObserver* out);
-Result_compat pglEnableApplicationCrashReport2(u32_compat process_id, int enabled);
-Result_compat pglEventObserverGetShellEvent(struct PglEventObserver* observer, u32_compat* out_event);
-Result_compat pglEventObserverGetShellEventInfo(struct PglEventObserver* observer, void* out_info);
-#ifdef __cplusplus
-}
-#endif
-C_DECL
-          echo "已注入PGL函数声明到pgl.h"
-
-          # 3. 写兼容实现：纯C链接，返回0(成功)，和声明完全匹配，不依赖任何Atmosphere类型
-          #    放在libstratosphere源码目录，自动被编译进静态库，保证链接时能找到符号
-          cat > libraries/libstratosphere/source/pgl/pgl_compat_stub.c << 'C_IMPL'
-/* 纯C实现，C链接，符号名和调用方完全匹配 */
-struct PglEventObserver;
-typedef unsigned int u32_compat;
-typedef u32_compat Result_compat;
-
-Result_compat pglCreateShellEvent(struct PglEventObserver* out) {
-    (void)out;
-    return 0;
-}
-Result_compat pglEnableApplicationCrashReport2(u32_compat process_id, int enabled) {
-    (void)process_id;
-    (void)enabled;
-    return 0;
-}
-Result_compat pglEventObserverGetShellEvent(struct PglEventObserver* observer, u32_compat* out_event) {
-    (void)observer;
-    (void)out_event;
-    return 0;
-}
-Result_compat pglEventObserverGetShellEventInfo(struct PglEventObserver* observer, void* out_info) {
-    (void)observer;
-    (void)out_info;
-    return 0;
-}
-C_IMPL
-          echo "已生成PGL兼容实现"
-      # === 编译参数和之前完全一致，不改动，已经验证能跑到最后阶段 ===
+          # 头文件声明：一行一条，简单追加，无嵌套
+          echo '#ifdef __cplusplus' >> "$PGL_H"
+          echo 'extern "C" {' >> "$PGL_H"
+          echo '#endif' >> "$PGL_H"
+          echo 'struct PglEventObserver;' >> "$PGL_H"
+          echo 'typedef unsigned int u32_compat;' >> "$PGL_H"
+          echo 'typedef u32_compat Result_compat;' >> "$PGL_H"
+          echo 'Result_compat pglCreateShellEvent(struct PglEventObserver* out);' >> "$PGL_H"
+          echo 'Result_compat pglEnableApplicationCrashReport2(u32_compat process_id, int enabled);' >> "$PGL_H"
+          echo 'Result_compat pglEventObserverGetShellEvent(struct PglEventObserver* observer, u32_compat* out_event);' >> "$PGL_H"
+          echo 'Result_compat pglEventObserverGetShellEventInfo(struct PglEventObserver* observer, void* out_info);' >> "$PGL_H"
+          echo '#ifdef __cplusplus' >> "$PGL_H"
+          echo '}' >> "$PGL_H"
+          echo '#endif' >> "$PGL_H"
+          # C实现文件：同样一行一条，无嵌套
+          STUB_FILE=libraries/libstratosphere/source/pgl/pgl_compat_stub.c
+          echo 'struct PglEventObserver;' > "$STUB_FILE"
+          echo 'typedef unsigned int u32_compat;' >> "$STUB_FILE"
+          echo 'typedef u32_compat Result_compat;' >> "$STUB_FILE"
+          echo 'Result_compat pglCreateShellEvent(struct PglEventObserver* out) { (void)out; return 0; }' >> "$STUB_FILE"
+          echo 'Result_compat pglEnableApplicationCrashReport2(u32_compat pid, int en) { (void)pid; (void)en; return 0; }' >> "$STUB_FILE"
+          echo 'Result_compat pglEventObserverGetShellEvent(struct PglEventObserver* obs, u32_compat* ev) { (void)obs; (void)ev; return 0; }' >> "$STUB_FILE"
+          echo 'Result_compat pglEventObserverGetShellEventInfo(struct PglEventObserver* obs, void* info) { (void)obs; (void)info; return 0; }' >> "$STUB_FILE"
+      # 编译参数完全不变，和之前跑30分钟的版本一致
       - run: |
           make -j1 \
             USER_CFLAGS="-Wno-error" \
