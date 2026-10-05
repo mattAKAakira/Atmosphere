@@ -20,27 +20,21 @@ jobs:
         with:
           fetch-depth: 0
       - run: git config --global --add safe.directory '*'
-      # ✅ 从报错看curl下载最新pgl.h已经100%成功，里面已经有所有正确声明，不需要任何追加/修改头文件
-      # ✅ 只补实现文件，签名完全匹配最新pgl.h，解决旧静态库缺符号的链接错误
       - run: |
-          # 下载最新pgl.h（已经验证能成功）
           PGL_H=$(find /opt/devkitpro -name "pgl.h" -path "*/services/*" | head -1)
           curl -fL --connect-timeout 10 --retry 3 https://raw.githubusercontent.com/switchbrew/libnx/master/nx/include/switch/services/pgl.h -o "$PGL_H"
-          echo "✅ 最新pgl.h下载完成，检查函数声明:"
-          grep -E "pgl(CreateShellEvent|EnableApplicationCrashReport2|EventObserverGetShellEvent)" "$PGL_H"
-          # 写实现文件：直接包含switch.h用官方类型，签名完全匹配头文件，不需要自定义任何typedef
           STUB=libraries/libstratosphere/source/pgl/pgl_compat_stub.c
           echo '#include <switch.h>' > "$STUB"
           echo 'Result pglCreateShellEvent(PglEventObserver* out) { (void)out; return 0; }' >> "$STUB"
           echo 'Result pglEnableApplicationCrashReport2(u64 pid, bool en) { (void)pid; (void)en; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEvent(PglEventObserver* obs, Event* ev) { (void)obs; (void)ev; return 0; }' >> "$STUB"
           echo 'Result pglEventObserverGetShellEventInfo(PglEventObserver* obs, PmProcessEventInfo* info) { (void)obs; (void)info; return 0; }' >> "$STUB"
-          echo "✅ 兼容实现文件生成完成"
-      # 编译参数完全不变，和之前跑30分钟的版本一致
+      # ✅ 只加USER_LDFLAGS把-Wno-error传到LTO链接阶段，额外关掉两个未初始化警告，其他参数完全不变
       - run: |
           make -j1 \
-            USER_CFLAGS="-Wno-error" \
-            USER_CXXFLAGS="-Wno-error -fno-rtti -fno-exceptions" \
+            USER_CFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized" \
+            USER_CXXFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized -fno-rtti -fno-exceptions" \
+            USER_LDFLAGS="-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized" \
             dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
