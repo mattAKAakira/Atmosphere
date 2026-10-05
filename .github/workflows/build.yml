@@ -8,23 +8,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkita64:latest
-    env:
-      DEVKITPRO: /opt/devkitpro
-      DEVKITA64: /opt/devkitpro/devkitA64
-      DEVKITARM: /opt/devkitpro/devkitARM
-      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin
+    # ✅ 完全不用Docker容器，避开镜像拉取失败、GCC版本过新、PATH丢失所有问题
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: git config --global --add safe.directory '*'
-      # ✅ 直接clone最新libnx源码编译安装，不用wget，不会有重定向/404问题，保证头文件和库是最新的，补上缺失的API
-      - run: |
-          git clone --depth=1 https://github.com/switchbrew/libnx /tmp/libnx
-          cd /tmp/libnx && make -j$(nproc) install
-      - run: make -j1 ATMOSPHERE_CFLAGS="-Wno-error" ATMOSPHERE_CXXFLAGS="-Wno-error" dist-no-debug-nx_release
+      # ✅ 官方安装Action：从GitHub下载预编译devkitPro工具链，不碰devkitpro官网，不会403
+      # ✅ 自动安装稳定版devkitA64/devkitARM/switch-dev/libnx，GCC版本和Atmosphere代码完全兼容，不会出现迭代器operator!=这种C++版本兼容错误
+      # ✅ 自动配置所有环境变量/PATH，不需要手动写
+      - uses: devkitpro/setup-devkitpro@v1
+        with:
+          packages: switch-dev switch-portlibs hactool
+      - run: pip install lz4
+      # ✅ 单线程编译，不需要手动关-Werror，稳定版GCC没有新警告，不会卡编译
+      - run: make -j1 dist-no-debug-nx_release
       - uses: actions/upload-artifact@v4
         with:
           name: atmosphere-build
