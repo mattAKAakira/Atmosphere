@@ -49,12 +49,12 @@ namespace ams::mitm::fs {
                 /* Trails in the Sky 1st Chapter. */
                 /* Requirement ? MB. 16 MB stolen heap fixes a crash, though. */
                 /* Unknown heap sensitivity. */
-                { 0x01002C9022770000,  16_MB, 0_MB },
+                { 0x01001E9023920000,  16_MB, 0_MB },
 
                 /* Trails in the Sky 2nd Chapter. */
                 /* Requirement ~16 MB.*/
                 /* No particular heap sensitivity. */
-                { 0x0100E8B028B54000,  8_MB, 0_MB },
+                { 0x0100E8B028B54000,  16_MB, 0_MB },
 
                 /* STAR WARS: Knights of the Old Republic II: The Sith Lords. */
                 /* Requirement ? MB. 16 MB stolen heap fixes a crash, though. */
