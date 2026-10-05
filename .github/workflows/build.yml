@@ -12,7 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      # 使用一个较新的 devkitPro 镜像；若可用，建议固定到具体标签
       image: devkitpro/devkita64:latest
     env:
       DEVKITPRO: /opt/devkitpro
@@ -24,11 +23,14 @@ jobs:
       - name: 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip lz4
-          pip3 install lz4 pycryptodome
+          sudo apt-get install -y \
+            python3 \
+            python3-lz4 \
+            python3-pycryptodome \
+            lz4
 
       - name: 检出 Atmosphère 1.12.0 源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: 1.12.0
           fetch-depth: 0
@@ -39,13 +41,13 @@ jobs:
           make -j$(nproc) dist-no-debug-nx_release
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: atmosphere-1.12.0-build
           path: out/nintendo_nx_arm64_armv8a/release/*
 
       - name: 创建 Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: out/nintendo_nx_arm64_armv8a/release/*
